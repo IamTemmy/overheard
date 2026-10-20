@@ -2,11 +2,14 @@
 
 It hears everything you say.
 
-M0: Listener inference harness for the Handshake multiplayer game concept. This is not yet a playable game or a deployed website.
+Local playable prototype plus M0 Listener inference harness for the Handshake multiplayer game concept. No hosted deployment yet.
 
 ## Run (Node 22+; no dependencies)
 
 ```
+npm start
+# Open http://127.0.0.1:3000
+
 npm test
 npm run bench:offline
 ```
@@ -25,6 +28,18 @@ Provisional targets from the brief: plain >=85%, light 40–70%, memory <=30% fi
 
 Responses API structured output reference: https://developers.openai.com/api/docs/guides/structured-outputs
 
-## Next
+## Local playtest
 
-See `docs/PLAN.md`. No changes to Blackout. No deployment configured. No live API evaluation has been performed in this initial commit.
+Create a room, choose the total crew size (default: you + 3 bots), and start. Use a second browser or browser profile to join the room before starting. Rooms support 2–5 total survivors; empty seats become bots. Send at most two 80-character radio messages, select an adjacent move, and lock. The server resolves after everyone locks or 30 seconds elapse, followed by a 6-second listening phase. A refresh rejoins your seat; an ordinary return visit starts at home. Captured players become Static, see the Listener, and get one transmission per turn. The Tape reveals movements only after the match ends.
+
+Teammates are currently scripted, not LLM-driven. They use only their own seat view, path toward their known parts/tower, and understand `help [exact memory phrase]` when otherwise free. The default offline Listener follows public noise/plain names, so **this build cannot establish whether the AI code-breaking mechanic is fun**. Enable the live Listener explicitly with `LIVE_LISTENER=1`, an API key, and a model; for an ignored `.env` file run `node --env-file=.env src/server/server.mjs`.
+
+Private reference-to-location associations are freshly shuffled per match, including references for all three initial part locations and the tower. Extra bot seats duplicate the other bots' intel rather than automatically receiving the first human's unique clue. There are 12 temporary reference stories, not the final 48-memory content set.
+
+This is a single-process local development server bound to 127.0.0.1. Rooms live in memory, expire after two inactive hours, and disappear on restart. It is not suitable for serverless or multi-instance deployment. Online message moderation, persistent room storage, rate limiting, host kick, isolated LLM teammate calls, sound, complete listening choreography, and final responsive-layout verification remain before a public release. Do not expose this prototype as the competition submission.
+
+## Verification and next steps
+
+28 automated tests cover the Listener boundary, spawn invariants, private seat views, radio limits, capture/drop/pickup precedence, late-game two-step traversal, turn-12 victory, Static restrictions, HTTP seat authentication, late joins, stale actions, and duplicate resolution. HTTP tests use two human seats. Browser visual QA has not run: the execution environment has Playwright but no installed browser executable.
+
+See `docs/PLAN.md` and `docs/STATUS.md`. Blackout is unchanged. Live AI accuracy and actual playtest fun remain unmeasured.
