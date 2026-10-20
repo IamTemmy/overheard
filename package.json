@@ -1,0 +1,1 @@
+{"name":"overheard","private":true,"type":"module","engines":{"node":">=22"},"scripts":{"test":"node --test","bench:offline":"node scripts/benchmark.mjs --offline","bench:live":"node scripts/benchmark.mjs"}}
