@@ -10,14 +10,12 @@ export function createGame(roster,{rng=Math.random,now=Date.now()}={}){
  const eligible=NODES.filter(n=>players.every(p=>distance(n,p.position)>=2));
  const creaturePosition=shuffled(eligible,rng)[0];if(!creaturePosition)throw Error('No safe spawn');
  const partNodes=shuffled(NODES.filter(n=>n!=='Radio Tower'&&!spawns.slice(0,players.length).includes(n)),rng);
- const parts=['FUSE','ANTENNA','BATTERY'].map((id,i)=>({id,node:partNodes[i],carrier:null,delivered:false}));
+ const parts=['FUSE','ANTENNA','BATTERY'].map((id,i)=>({id,node:partNodes[i],carrier:null,delivered:false,heavy:id!=='FUSE'}));
  for(let i=0;i<Math.max(3,players.length);i++){const part=parts[i<3?i:1+(i-3)%2];players[i%players.length].known.push({part:part.id,node:part.node});}
- const memoryNodes=shuffled([...new Set([...partNodes.slice(0,3),'Radio Tower',...shuffled(NODES,rng)])],rng).slice(0,6);
- // Guarantee all three objectives have a usable private code, plus tower and two others.
- memoryNodes.splice(0,6,...[...new Set([...partNodes.slice(0,3),'Radio Tower',...memoryNodes,...NODES])].slice(0,6));
- const stories=shuffled(STORIES,rng);
+ const memoryNodes=shuffled(NODES,rng).slice(0,6);
+ const memories=memoryNodes.map(node=>shuffled(STORIES.filter(m=>m.node===node),rng)[0]);
  return {phase:'radio',turn:1,deadline:now+TURN_MS,phaseStartedAt:now,difficulty:'NORMAL',players,parts,creaturePosition,
- memories:memoryNodes.map((node,i)=>({node,phrase:stories[i][0],story:stories[i][1]})),transcript:[],publicEvents:[],notebook:[],tape:[],lastReveal:null,outcome:null};
+ memories,transcript:[],publicEvents:[],notebook:[],suspicions:[],tape:[],lastReveal:null,outcome:null};
 }
 function player(g,id){const p=g.players.find(p=>p.id===id);if(!p)throw Error('Unknown seat');return p;}
 function active(g,now){if(g.phase!=='radio'||now>=g.deadline)throw Error('Radio is closed');}
@@ -38,10 +36,11 @@ export function lockMove(g,id,move,now=Date.now()){
 export function seatView(g,id){
  const p=player(g,id),d=distance(p.position,g.creaturePosition);
  return {phase:g.phase,turn:g.turn,deadline:g.deadline,phaseStartedAt:g.phaseStartedAt,map:MAP,
+ visibleParts:g.parts.filter(x=>!x.delivered&&!x.carrier&&x.node===p.position).map(x=>({id:x.id,heavy:x.heavy})),
  self:{id:p.id,name:p.name,position:p.position,static:p.static,known:p.known,locked:p.locked,move:p.move,carrying:g.parts.filter(x=>x.carrier===id).map(x=>x.id)},
  crew:g.players.map(q=>({id:q.id,name:q.name,bot:q.bot,static:q.static,locked:q.locked,position:q.id===id||(!p.static&&!q.static&&q.position===p.position)?q.position:null})),
- parts:g.parts.map(x=>({id:x.id,status:x.delivered?'delivered':x.carrier?'carried':'missing'})),
- memories:g.memories,notebook:g.notebook,transcript:g.transcript.map(({turn,speaker,text})=>({turn,speaker,text})),publicEvents:g.publicEvents,
+ parts:g.parts.map(x=>({id:x.id,heavy:x.heavy,status:x.delivered?'delivered':x.carrier?'carried':'missing'})),
+ memories:g.memories,notebook:g.notebook,suspicions:g.suspicions??[],transcript:g.transcript.map(({turn,speaker,text})=>({turn,speaker,text})),publicEvents:g.publicEvents,
  creature:p.static||d<=2?g.creaturePosition:null,cue:p.static?'You see it through the static.':d===1?'It is close.':d===2?'Something moves nearby.':'Only silence.',
  lastReveal:g.lastReveal,outcome:g.outcome,tape:g.phase==='ended'?g.tape:undefined};
 }
@@ -68,14 +67,21 @@ export function resolveTurn(g,decision,now=Date.now()){
  }
  // Stable seat order assigns a pickup when survivors land together. Captures precede delivery.
  for(const p of g.players.filter(p=>!p.static))for(const part of g.parts){
- if(!part.delivered&&!part.carrier&&part.node===p.position){part.carrier=p.id;part.node=null;events.push({turn:g.turn,type:'CLANG',node:p.position});}
+ if(!part.delivered&&!part.carrier&&part.node===p.position&&(!part.heavy||g.players.filter(q=>!q.static&&q.position===p.position).length>=2)){part.carrier=p.id;part.node=null;events.push({turn:g.turn,type:'CLANG',node:p.position});}
  if(part.carrier===p.id&&p.position==='Radio Tower'){part.carrier=null;part.delivered=true;events.push({turn:g.turn,type:'DELIVERED',node:'Radio Tower',part:part.id});}
  }
- // Confirm only against public capture evidence for that speaker; secret positions never certify a guess.
+ // Correlation is public evidence, not proof of the speaker's private intent.
  const learned=[];
- for(const proposal of decision.notebook_proposals){const evidence=decision.heard.find(h=>h.quote===proposal.phrase&&h.guess_node===proposal.node);
- if(evidence&&g.transcript.some(m=>m.turn===g.turn&&m.speaker===evidence.speaker&&m.text.includes(proposal.phrase))&&events.some(e=>e.type==='CAPTURE'&&e.speaker===evidence.speaker&&e.node===proposal.node)&&!g.notebook.some(n=>n.phrase===proposal.phrase&&n.node===proposal.node)){const entry={phrase:proposal.phrase,node:proposal.node};g.notebook.push(entry);learned.push(entry);}}
+ const proposals=[...(g.suspicions??[]),...decision.notebook_proposals.map(p=>({...p,proposedTurn:g.turn}))];
  g.publicEvents.push(...events);
+ for(const proposal of proposals){
+ const quoteTurns=g.transcript.filter(m=>m.turn>=g.turn-2&&m.turn<=g.turn&&m.text.includes(proposal.phrase)).map(m=>m.turn);
+ const evidence=g.publicEvents.find(e=>['CLANG','CAPTURE','DELIVERED'].includes(e.type)&&e.node===proposal.node&&quoteTurns.some(t=>e.turn===t||e.turn===t+1));
+ if(evidence&&!g.notebook.some(n=>n.phrase===proposal.phrase&&n.node===proposal.node)){
+ const entry={phrase:proposal.phrase,node:proposal.node,status:'correlated',evidence:{type:evidence.type,turn:evidence.turn,node:evidence.node}};
+ g.notebook.push(entry);learned.push(entry);}
+ }
+ g.suspicions=proposals.filter((p,i,all)=>p.proposedTurn>=g.turn-2&&!g.notebook.some(n=>n.phrase===p.phrase&&n.node===p.node)&&all.findIndex(n=>n.phrase===p.phrase&&n.node===p.node)===i).slice(-10);
  g.lastReveal={turn:g.turn,heard:decision.heard,taunt:decision.taunt,learned,events};
  g.tape.push({turn:g.turn,messages:g.transcript.filter(m=>m.turn===g.turn).map(({speaker,text})=>({speaker,text})),heard:decision.heard,moves:g.players.map(p=>({speaker:p.name,from:oldPositions[p.id],to:p.position,intent:p.intent,static:p.static})),creaturePath,events});
  const won=g.parts.every(p=>p.delivered),lost=g.players.every(p=>p.static)||g.turn===12;
